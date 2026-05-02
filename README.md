@@ -70,7 +70,12 @@ Telegram message
 ↓
 Telegram app
 
+
 ## Version 2 Notes
+
+- GitHub Actions currently runs successfully.
+
+[1] 
 
 - Improve Telegram message formatting.
 - Display stock price with 1 decimal place instead of rounded integer.
@@ -79,3 +84,10 @@ Telegram app
 - Consider grouping stocks by sector in the Telegram message.
 - Consider saving signal history to Google Sheet.
 - Consider using Make.com for message formatting and routing.
+
+[2] 
+
+- There is a warning about Node.js 20 actions being deprecated.
+- In the future, update GitHub Actions dependencies if needed:
+  - `actions/checkout`
+  - `actions/setup-python`

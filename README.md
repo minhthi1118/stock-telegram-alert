@@ -69,3 +69,13 @@ Signal calculation
 Telegram message
 ↓
 Telegram app
+
+## Version 2 Notes
+
+- Improve Telegram message formatting.
+- Display stock price with 1 decimal place instead of rounded integer.
+  - Example: show `18.2` instead of `18`
+  - Example: show `19.5` instead of `20`
+- Consider grouping stocks by sector in the Telegram message.
+- Consider saving signal history to Google Sheet.
+- Consider using Make.com for message formatting and routing.

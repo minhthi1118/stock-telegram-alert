@@ -1,0 +1,4 @@
+vnstock
+python-dotenv
+pandas
+requests

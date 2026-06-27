@@ -5,7 +5,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests
 from vnstock import Quote
-from config import ALL_STOCKS, MA_SHORT, MA_LONG, SIDEWAY_THRESHOLD, SIDEWAY_DAYS
+from config import (
+    ALL_STOCKS, MA_SHORT, MA_LONG, SIDEWAY_THRESHOLD, SIDEWAY_DAYS,
+    BASE_THRESHOLD_10, BASE_THRESHOLD_20, BASE_THRESHOLD_30, WATCHLIST
+)
 
 # 1. Setup - Load secrets from .env file (for local testing)
 load_dotenv()
@@ -69,6 +72,18 @@ def calculate_signals(symbol):
         volume = current['volume']
         avg_vol = current['vol_avg']
 
+        # Parse Latest Trading Date from current['time']
+        if 'time' in current and not pd.isna(current['time']):
+            if hasattr(current['time'], 'strftime'):
+                trading_date = current['time'].strftime('%Y-%m-%d')
+            else:
+                trading_date = str(current['time'])[:10]
+        else:
+            trading_date = datetime.now().strftime('%Y-%m-%d')
+
+        # Daily change: (current close - previous close) / previous close
+        daily_change = (price - previous['close']) / previous['close'] if previous['close'] else 0.0
+
         # SIGNAL 1: Breakout above MA20 or MA50 with higher volume
         break_ma20 = current['close'] > current['ma20'] and previous['close'] <= previous['ma20']
         break_ma50 = current['close'] > current['ma50'] and previous['close'] <= previous['ma50']
@@ -95,18 +110,57 @@ def calculate_signals(symbol):
         if drawdown > 0.10: # Only report if fallen more than 10%
             signals.append(f"📉 Drawdown: {drawdown:.1%}")
 
-        # SIGNAL 5: Sideways Duration
+        # SIGNAL 5: Sideways Duration (5 days)
         # Check if price stayed within a narrow range for the last N days
         last_n_days = df.tail(SIDEWAY_DAYS)
         price_range = (last_n_days['high'].max() - last_n_days['low'].min()) / last_n_days['low'].min()
         if price_range <= SIDEWAY_THRESHOLD:
             signals.append(f"↔️ Sideways ({SIDEWAY_DAYS} days)")
 
+        # Sideways Base Formation (10, 20, 30 days)
+        if len(df) >= 10:
+            last_10 = df.tail(10)
+            range_10 = (last_10['high'].max() - last_10['low'].min()) / last_10['low'].min()
+            if range_10 <= BASE_THRESHOLD_10:
+                signals.append("↔️ Sideways (10 days)")
+
+        if len(df) >= 20:
+            last_20 = df.tail(20)
+            range_20 = (last_20['high'].max() - last_20['low'].min()) / last_20['low'].min()
+            if range_20 <= BASE_THRESHOLD_20:
+                signals.append("↔️ Sideways (20 days)")
+
+        if len(df) >= 30:
+            last_30 = df.tail(30)
+            range_30 = (last_30['high'].max() - last_30['low'].min()) / last_30['low'].min()
+            if range_30 <= BASE_THRESHOLD_30:
+                signals.append("↔️ Sideways (30 days)")
+
+        # Breakout from 20-day base
+        if len(df) >= 21:
+            prev_20 = df.iloc[-21:-1]
+            highest_high_20 = prev_20['high'].max()
+            if price > highest_high_20 and volume > avg_vol and price > current['ma20']:
+                signals.append("🚀 20-Day Base Breakout")
+
+        # Volume Contraction
+        if len(df) >= 20:
+            vol_avg_5 = df['volume'].tail(5).mean()
+            vol_avg_20 = df['volume'].tail(20).mean()
+            if vol_avg_5 < vol_avg_20:
+                signals.append("🔇 Volume Contraction")
+
+        # Distance from MA20
+        ma20_dist = (price - current['ma20']) / current['ma20'] if current['ma20'] and not pd.isna(current['ma20']) else 0.0
+
         return {
             "symbol": symbol,
             "price": price,
             "signals": signals,
-            "above_ma20": price > current['ma20']
+            "above_ma20": price > current['ma20'],
+            "ma20_dist": ma20_dist,
+            "daily_change": daily_change,
+            "trading_date": trading_date
         }
     except Exception as e:
         print(f"Error calculating signals for {symbol}: {e}")
@@ -136,25 +190,47 @@ def main():
     
     # 5. Format the message
     date_str = datetime.now().strftime('%Y-%m-%d')
-    message = f"📊 *VN Stock Daily Alert*\nDate: {date_str}\n\n"
+    # Find the trading date from results
+    trading_dates = [r['trading_date'] for r in results if 'trading_date' in r]
+    trading_date_str = trading_dates[0] if trading_dates else date_str
+
+    message = f"📊 *VN Stock Daily Alert*\nTrading Date: {trading_date_str} (Run Date: {date_str})\n\n"
     
     # Only show breadth if it's significant (>= 50%)
     if breadth >= 0.5:
         message += f"💡 *Watchlist Health: {breadth:.0%} of stocks above MA20*\n\n"
 
+    # Create mapping from stock symbol to its calculated result
+    results_map = {r['symbol']: r for r in results}
+
+    # Section 1: Watchlist Prices (Every stock in the watchlist by sector)
+    message += "📈 *Watchlist Prices*\n"
+    for sector, symbols in WATCHLIST.items():
+        price_strs = []
+        for sym in symbols:
+            if sym in results_map:
+                r = results_map[sym]
+                # Format: BVB: 13.8 | Day: -2.1% | MA20: +6.1%
+                price_strs.append(f"{sym}: {r['price']:,.1f} | Day: {r['daily_change']:+.1%} | MA20: {r['ma20_dist']:+.1%}")
+            else:
+                price_strs.append(f"{sym}: N/A")
+        message += f"• *{sector}*: {', '.join(price_strs)}\n"
+    message += "\n"
+
+    # Section 2: Signal Alerts
+    message += "🔔 *Signal Alerts*\n"
     alert_found = False
     for res in results:
-        # Only list stocks that have at least one signal to keep message short
         if res['signals']:
             alert_found = True
             message += f"*{res['symbol']}*\n"
-            message += f"• Price: {res['price']:,.0f}\n"
+            message += f"• Price: {res['price']:,.1f} | Day: {res['daily_change']:+.1%} | MA20: {res['ma20_dist']:+.1%}\n"
             for s in res['signals']:
                 message += f"• {s}\n"
             message += "\n"
 
     if not alert_found:
-        message += "No significant signals detected for your watchlist today."
+        message += "No significant signals detected for your watchlist today.\n"
 
     print("Sending results to Telegram...")
     send_telegram_message(message)
